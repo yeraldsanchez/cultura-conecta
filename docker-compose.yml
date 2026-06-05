@@ -1,0 +1,12 @@
+services:
+  cultura-conecta:
+    container_name: cultura-conecta
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    ports:
+      - "10000:10000"
+
+    restart: unless-stopped
