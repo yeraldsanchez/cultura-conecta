@@ -10,9 +10,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-//prueba de commit
+import { useAuth } from '@/lib/auth-context'
+import { ApiError } from '@/lib/api'
+
 export default function LoginPage() {
   const router = useRouter()
+  const { login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -58,20 +61,21 @@ export default function LoginPage() {
     setTouched({ email: true, password: true })
     
     if (emailError || passwordError) return
-    
+
     setIsLoading(true)
-    
-    // Simulate login
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    
-    // For demo, simulate error for wrong credentials
-    if (password === 'error') {
-      setError('Credenciales inválidas. Verifica tu correo y contraseña.')
+
+    try {
+      await login(email, password)
+      router.push('/dashboard')
+    } catch (err) {
+      if (err instanceof ApiError) {
+        // 401 from the backend means invalid credentials; 0 means network failure.
+        setError(err.message)
+      } else {
+        setError('Ocurrió un error inesperado. Intenta nuevamente.')
+      }
       setIsLoading(false)
-      return
     }
-    
-    router.push('/dashboard')
   }
 
   return (
@@ -147,15 +151,7 @@ export default function LoginPage() {
                 
                 {/* Password */}
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">Contraseña</Label>
-                    <Link 
-                      href="/recuperar-password" 
-                      className="text-xs text-muted-foreground hover:text-primary transition-colors"
-                    >
-                      ¿Olvidaste tu contraseña?
-                    </Link>
-                  </div>
+                  <Label htmlFor="password">Contraseña</Label>
                   <div className="relative">
                     <Input
                       id="password"

@@ -7,11 +7,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Eye, EyeOff, Loader2, Check, X } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Eye, EyeOff, Loader2, Check, X, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/lib/auth-context'
+import { ApiError } from '@/lib/api'
 
 export default function RegistroPage() {
   const router = useRouter()
+  const { register, login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -20,12 +24,11 @@ export default function RegistroPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const [serverError, setServerError] = useState('')
 
-  // Password validation rules
+  // Backend rule (RegisterRequest): email válido + password min 8 caracteres.
   const passwordRules = [
     { label: 'Mínimo 8 caracteres', check: (p: string) => p.length >= 8 },
-    { label: 'Al menos una mayúscula', check: (p: string) => /[A-Z]/.test(p) },
-    { label: 'Al menos un número', check: (p: string) => /[0-9]/.test(p) },
   ]
 
   const validateEmail = (value: string) => {
@@ -37,8 +40,6 @@ export default function RegistroPage() {
   const validatePassword = (value: string) => {
     if (!value) return 'La contraseña es requerida'
     if (value.length < 8) return 'La contraseña debe tener al menos 8 caracteres'
-    if (!/[A-Z]/.test(value)) return 'La contraseña debe tener al menos una mayúscula'
-    if (!/[0-9]/.test(value)) return 'La contraseña debe tener al menos un número'
     return ''
   }
 
@@ -50,12 +51,12 @@ export default function RegistroPage() {
 
   const handleBlur = (field: string) => {
     setTouched(prev => ({ ...prev, [field]: true }))
-    
+
     let error = ''
     if (field === 'email') error = validateEmail(email)
     if (field === 'password') error = validatePassword(password)
     if (field === 'confirmPassword') error = validateConfirmPassword(confirmPassword)
-    
+
     setErrors(prev => ({ ...prev, [field]: error }))
   }
 
@@ -69,27 +70,44 @@ export default function RegistroPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    // Validate all fields
+    setServerError('')
+
     const emailError = validateEmail(email)
     const passwordError = validatePassword(password)
     const confirmError = validateConfirmPassword(confirmPassword)
-    
+
     setErrors({
       email: emailError,
       password: passwordError,
       confirmPassword: confirmError,
     })
     setTouched({ email: true, password: true, confirmPassword: true })
-    
+
     if (emailError || passwordError || confirmError) return
-    
+
     setIsLoading(true)
-    
-    // Simulate registration
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    
-    router.push('/onboarding')
+
+    try {
+      // 1) Create the account.
+      await register(email, password)
+      // 2) Immediately log in to obtain a session token, then continue to onboarding.
+      await login(email, password)
+      router.push('/onboarding')
+    } catch (err) {
+      if (err instanceof ApiError) {
+        // Surface field-level backend validation (e.g. email already registered).
+        const fieldError = err.details.find(d => d.field === 'email')
+        if (fieldError) {
+          setErrors(prev => ({ ...prev, email: fieldError.message }))
+          setTouched(prev => ({ ...prev, email: true }))
+        } else {
+          setServerError(err.message)
+        }
+      } else {
+        setServerError('Ocurrió un error inesperado. Intenta nuevamente.')
+      }
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -106,7 +124,7 @@ export default function RegistroPage() {
               CulturaConecta
             </span>
           </Link>
-          
+
           <Card className="border-border/50 shadow-lg">
             <CardHeader className="space-y-1 pb-4">
               <CardTitle className="font-serif text-2xl">Crear cuenta</CardTitle>
@@ -115,6 +133,13 @@ export default function RegistroPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {serverError && (
+                <Alert variant="destructive" className="mb-4">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{serverError}</AlertDescription>
+                </Alert>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Email */}
                 <div className="space-y-2">
@@ -135,7 +160,7 @@ export default function RegistroPage() {
                     <p className="text-sm text-destructive">{errors.email}</p>
                   )}
                 </div>
-                
+
                 {/* Password */}
                 <div className="space-y-2">
                   <Label htmlFor="password">Contraseña</Label>
@@ -162,7 +187,7 @@ export default function RegistroPage() {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
-                  
+
                   {/* Password rules */}
                   {password && (
                     <div className="space-y-1.5 pt-2">
@@ -184,7 +209,7 @@ export default function RegistroPage() {
                     </div>
                   )}
                 </div>
-                
+
                 {/* Confirm Password */}
                 <div className="space-y-2">
                   <Label htmlFor="confirmPassword">Confirmar contraseña</Label>
@@ -221,11 +246,11 @@ export default function RegistroPage() {
                     </p>
                   )}
                 </div>
-                
+
                 {/* Submit */}
-                <Button 
-                  type="submit" 
-                  className="w-full" 
+                <Button
+                  type="submit"
+                  className="w-full"
                   size="lg"
                   disabled={isLoading || !isFormValid()}
                 >
@@ -239,7 +264,7 @@ export default function RegistroPage() {
                   )}
                 </Button>
               </form>
-              
+
               <div className="mt-6 text-center text-sm text-muted-foreground">
                 ¿Ya tienes cuenta?{' '}
                 <Link href="/login" className="text-primary font-medium hover:underline">
@@ -248,7 +273,7 @@ export default function RegistroPage() {
               </div>
             </CardContent>
           </Card>
-          
+
           <p className="mt-6 text-center text-xs text-muted-foreground">
             Al crear tu cuenta, aceptas nuestros{' '}
             <a href="#" className="underline hover:text-foreground">Términos de servicio</a>
@@ -257,7 +282,7 @@ export default function RegistroPage() {
           </p>
         </div>
       </div>
-      
+
       {/* Right side - Visual */}
       <div className="hidden lg:flex flex-1 items-center justify-center bg-muted/30 p-12">
         <div className="max-w-md text-center">
@@ -268,7 +293,7 @@ export default function RegistroPage() {
             Tu comunidad cultural te espera
           </h2>
           <p className="text-muted-foreground leading-relaxed">
-            Conecta con personas que comparten tu pasión por el cine, teatro y lectura. 
+            Conecta con personas que comparten tu pasión por el cine, teatro y lectura.
             Conversaciones profundas con quienes analizan las obras como tú.
           </p>
         </div>
