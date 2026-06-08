@@ -28,8 +28,11 @@ export default function RegistroPage() {
 
   // Backend rule (RegisterRequest): email válido + password min 8 caracteres.
   const passwordRules = [
-    { label: 'Mínimo 8 caracteres', check: (p: string) => p.length >= 8 },
+  { label: 'Mínimo 8 caracteres', check: (p: string) => p.length >= 8 },
+  { label: 'Al menos una mayúscula', check: (p: string) => /[A-Z]/.test(p) },
+  { label: 'Al menos un símbolo especial', check: (p: string) => /[^A-Za-z0-9]/.test(p) },
   ]
+
 
   const validateEmail = (value: string) => {
     if (!value) return 'El correo electrónico es requerido'
