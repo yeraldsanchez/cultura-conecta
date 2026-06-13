@@ -1,9 +1,9 @@
 // Typed bindings for every CulturaConecta backend endpoint.
 //
-// These mirror the Go service output structs exactly. Where the backend has
-// no endpoint yet (single group, join/leave, members, forum, events, profile
-// fetch/update) there is intentionally no function here — those flows fall back
-// to clearly-marked local mock data in the app layer.
+// These mirror the Go service output structs exactly. Endpoints not yet exposed
+// by the backend (single group fetch, leave group, members list, forum, events)
+// intentionally have no function here — those flows fall back to clearly-marked
+// local mock data in the app layer.
 
 import { apiRequest } from "./client"
 
@@ -15,7 +15,14 @@ export interface RegisterResponse {
 }
 
 export interface LoginResponse {
-  token: string
+  access_token: string
+  refresh_token: string
+  token_type: string
+}
+
+export interface RefreshResponse {
+  access_token: string
+  token_type: string
 }
 
 export function register(email: string, password: string) {
@@ -30,6 +37,25 @@ export function login(email: string, password: string) {
   return apiRequest<LoginResponse>("/auth/login", {
     method: "POST",
     body: { email, password },
+    auth: false,
+  })
+}
+
+// Exchanges a refresh token for a fresh access token. Used both explicitly on
+// logout-adjacent flows and implicitly by the client's 401 retry logic.
+export function refreshAccessToken(refreshToken: string) {
+  return apiRequest<RefreshResponse>("/auth/refresh", {
+    method: "POST",
+    body: { refresh_token: refreshToken },
+    auth: false,
+  })
+}
+
+// Revokes the refresh token server-side. Returns 204 (no body).
+export function logout(refreshToken: string) {
+  return apiRequest<void>("/auth/logout", {
+    method: "POST",
+    body: { refresh_token: refreshToken },
     auth: false,
   })
 }
@@ -49,6 +75,26 @@ export async function getInterests(): Promise<CatalogItem[]> {
 export async function getFocusTypes(): Promise<CatalogItem[]> {
   const data = await apiRequest<{ focus_types: CatalogItem[] }>("/focus-types", { auth: false })
   return data.focus_types ?? []
+}
+
+// Creates a new interest in the catalog (returns 201 with { interest }).
+export async function createInterest(name: string): Promise<CatalogItem> {
+  const data = await apiRequest<{ interest: CatalogItem }>("/interests", {
+    method: "POST",
+    body: { name },
+    auth: false,
+  })
+  return data.interest
+}
+
+// Creates a new focus type in the catalog (returns 201 with { focus_type }).
+export async function createFocusType(name: string): Promise<CatalogItem> {
+  const data = await apiRequest<{ focus_type: CatalogItem }>("/focus-types", {
+    method: "POST",
+    body: { name },
+    auth: false,
+  })
+  return data.focus_type
 }
 
 // --- Cultural works --------------------------------------------------------
@@ -98,6 +144,60 @@ export async function createProfile(input: CreateProfileInput): Promise<ProfileD
   const data = await apiRequest<{ profile: ProfileDTO }>("/users", {
     method: "POST",
     body: input,
+  })
+  return data.profile
+}
+
+// Fetches a user profile by id (protected).
+export async function getProfile(userId: number): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}`)
+  return data.profile
+}
+
+export interface PatchProfileInput {
+  name?: string
+  depth_level?: string
+}
+
+// Partially updates a profile. Backend requires at least one field present.
+export async function patchProfile(userId: number, input: PatchProfileInput): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}`, {
+    method: "PATCH",
+    body: input,
+  })
+  return data.profile
+}
+
+// Adds an interest (category) to a profile and returns the updated profile.
+export async function addInterest(userId: number, categoryId: number): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}/interests`, {
+    method: "POST",
+    body: { category_id: categoryId },
+  })
+  return data.profile
+}
+
+// Removes an interest (category) from a profile and returns the updated profile.
+export async function removeInterest(userId: number, categoryId: number): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}/interests/${categoryId}`, {
+    method: "DELETE",
+  })
+  return data.profile
+}
+
+// Adds a focus type to a profile and returns the updated profile.
+export async function addFocusType(userId: number, focusTypeId: number): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}/focus-types`, {
+    method: "POST",
+    body: { focus_type_id: focusTypeId },
+  })
+  return data.profile
+}
+
+// Removes a focus type from a profile and returns the updated profile.
+export async function removeFocusType(userId: number, focusTypeId: number): Promise<ProfileDTO> {
+  const data = await apiRequest<{ profile: ProfileDTO }>(`/users/${userId}/focus-types/${focusTypeId}`, {
+    method: "DELETE",
   })
   return data.profile
 }
@@ -167,4 +267,12 @@ export async function createGroup(input: CreateGroupInput): Promise<GroupDTO> {
     body: input,
   })
   return data.group
+}
+
+// Joins the authenticated user to a group. The user id is taken from the JWT
+// server-side, so no body is needed. Returns 204 (no content).
+export async function joinGroup(groupId: number): Promise<void> {
+  await apiRequest<void>(`/groups/${groupId}/members`, {
+    method: "POST",
+  })
 }

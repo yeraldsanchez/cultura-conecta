@@ -18,8 +18,8 @@ function AuthenticatedLayoutContent({ children }: { children: ReactNode }) {
     }
   }, [isInitializing, isAuthenticated, router])
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     router.push('/')
   }
 
