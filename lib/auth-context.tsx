@@ -2,10 +2,13 @@
 
 // Real session + auth context for CulturaConecta.
 //
-// This replaces the previous mock implementation. It now:
+// This now:
 //  - calls the real /auth/login + /auth/register endpoints,
-//  - persists the JWT (via lib/api token helpers) and decodes the user id,
+//  - persists the access + refresh tokens (via lib/api token helpers) and
+//    decodes the user id from the access token,
 //  - hydrates the session from localStorage on mount,
+//  - revokes the refresh token server-side on logout (/auth/logout),
+//  - reacts to refresh failures (expired/revoked session) by resetting state,
 //  - tracks the profile created during onboarding (POST /users) so the UI can
 //    show name + cultural preferences without a profile-fetch endpoint.
 //
@@ -16,13 +19,16 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import {
   ApiError,
-  clearToken,
-  getToken,
+  clearTokens,
+  getAccessToken,
+  getRefreshToken,
   getUserIdFromToken,
   isTokenExpired,
   login as apiLogin,
+  logout as apiLogout,
   register as apiRegister,
-  setToken,
+  setSessionExpiredHandler,
+  setTokens,
   type ProfileDTO,
 } from "@/lib/api"
 
@@ -53,7 +59,7 @@ interface AuthContextType {
   isInitializing: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, password: string) => Promise<number>
-  logout: () => void
+  logout: () => Promise<void>
   setProfile: (profile: ProfileDTO) => void
 }
 
@@ -79,31 +85,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null)
   const [isInitializing, setIsInitializing] = useState(true)
 
-  // Hydrate from a previously stored token on first mount.
+  // Hydrate from previously stored tokens on first mount.
   useEffect(() => {
-    const token = getToken()
-    if (token && !isTokenExpired(token)) {
-      const id = getUserIdFromToken(token)
+    const accessToken = getAccessToken()
+    const refreshToken = getRefreshToken()
+
+    if (accessToken && !isTokenExpired(accessToken)) {
+      const id = getUserIdFromToken(accessToken)
       if (id !== null) {
         const cached = readCachedProfile()
-        setUser(
-          buildUser(id, cached?.email, cached && cached.user_id === id ? cached : null),
-        )
+        setUser(buildUser(id, cached?.email, cached && cached.user_id === id ? cached : null))
       }
-    } else if (token) {
-      // Expired token: clean up.
-      clearToken()
+    } else if (accessToken && refreshToken) {
+      // Access token expired but we still have a refresh token: keep the cached
+      // session and let the client transparently refresh on the next request.
+      const id = getUserIdFromToken(accessToken)
+      if (id !== null) {
+        const cached = readCachedProfile()
+        setUser(buildUser(id, cached?.email, cached && cached.user_id === id ? cached : null))
+      }
+    } else if (accessToken || refreshToken) {
+      // No usable session: clean up.
+      clearTokens()
       writeCachedProfile(null)
     }
     setIsInitializing(false)
   }, [])
 
+  // Let the API client notify us when a refresh fails (session expired/revoked).
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      writeCachedProfile(null)
+      setUser(null)
+    })
+    return () => setSessionExpiredHandler(null)
+  }, [])
+
   const login = useCallback(async (email: string, password: string) => {
-    const { token } = await apiLogin(email, password)
-    setToken(token)
-    const id = getUserIdFromToken(token)
+    const { access_token, refresh_token } = await apiLogin(email, password)
+    setTokens(access_token, refresh_token)
+    const id = getUserIdFromToken(access_token)
     if (id === null) {
-      clearToken()
+      clearTokens()
       throw new ApiError("No se pudo leer la sesión del token recibido.", 0)
     }
     // No profile-fetch endpoint: reuse a cached profile only if it matches this user.
@@ -118,8 +141,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user_id
   }, [])
 
-  const logout = useCallback(() => {
-    clearToken()
+  const logout = useCallback(async () => {
+    const refreshToken = getRefreshToken()
+    // Best-effort server-side revocation; never block the client logout on it.
+    if (refreshToken) {
+      try {
+        await apiLogout(refreshToken)
+      } catch {
+        // Ignore network/validation errors — we clear local state regardless.
+      }
+    }
+    clearTokens()
     writeCachedProfile(null)
     setUser(null)
   }, [])
