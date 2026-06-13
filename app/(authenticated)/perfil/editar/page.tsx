@@ -2,12 +2,12 @@
 
 // Edit profile page.
 //
-// Backend reality: there is NO dedicated profile-UPDATE endpoint. The only
-// profile write available is POST /users (createProfile), which sets the
-// cultural profile (name, depth level, interests, focus types). We reuse it
-// here and clearly tell the user that this configures/initializes their profile
-// rather than performing a partial update. The form is driven by the live
-// catalog (interests + focus types) instead of hardcoded enums.
+// When the user has no cultural profile yet we initialize it with POST /users
+// (createProfile). When a profile already exists we perform real partial
+// updates: PATCH /users/:id for name + depth level, and the add/remove
+// interest & focus-type endpoints to reconcile the selected sets against what
+// the profile currently has. The form is driven by the live catalog
+// (interests + focus types) instead of hardcoded enums.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -25,7 +25,17 @@ import {
   FocusTypeSelector,
   DepthLevelSelector,
 } from '@/components/catalog-selectors'
-import { getInterests, getFocusTypes, createProfile, ApiError } from '@/lib/api'
+import {
+  getInterests,
+  getFocusTypes,
+  createProfile,
+  patchProfile,
+  addInterest,
+  removeInterest,
+  addFocusType,
+  removeFocusType,
+  ApiError,
+} from '@/lib/api'
 import { AlertCircle, Loader2, ArrowLeft, Info } from 'lucide-react'
 
 export default function EditarPerfilPage() {
@@ -65,13 +75,53 @@ export default function EditarPerfilPage() {
     setError('')
 
     try {
-      const updated = await createProfile({
-        user_id: user.userId,
-        name: name.trim(),
-        depth_level: level!,
-        focus_ids: selectedFocus,
-        interests_ids: selectedInterests,
-      })
+      let updated
+
+      if (!profile) {
+        // No cultural profile yet: initialize it in one call.
+        updated = await createProfile({
+          user_id: user.userId,
+          name: name.trim(),
+          depth_level: level!,
+          focus_ids: selectedFocus,
+          interests_ids: selectedInterests,
+        })
+      } else {
+        // Existing profile: reconcile against the backend with real partial
+        // updates. Start with name + depth level via PATCH.
+        const nameChanged = name.trim() !== profile.name
+        const levelChanged = level !== profile.depth_level
+        if (nameChanged || levelChanged) {
+          updated = await patchProfile(user.userId, {
+            ...(nameChanged ? { name: name.trim() } : {}),
+            ...(levelChanged ? { depth_level: level! } : {}),
+          })
+        }
+
+        // Reconcile interests: add the newly selected, remove the deselected.
+        const currentInterests = profile.interests.map((i) => i.id)
+        for (const id of selectedInterests.filter((id) => !currentInterests.includes(id))) {
+          updated = await addInterest(user.userId, id)
+        }
+        for (const id of currentInterests.filter((id) => !selectedInterests.includes(id))) {
+          updated = await removeInterest(user.userId, id)
+        }
+
+        // Reconcile focus types the same way.
+        const currentFocus = profile.focus_types.map((f) => f.id)
+        for (const id of selectedFocus.filter((id) => !currentFocus.includes(id))) {
+          updated = await addFocusType(user.userId, id)
+        }
+        for (const id of currentFocus.filter((id) => !selectedFocus.includes(id))) {
+          updated = await removeFocusType(user.userId, id)
+        }
+
+        // If nothing changed, fall back to the freshest server copy.
+        if (!updated) {
+          updated = await patchProfile(user.userId, { name: name.trim() })
+        }
+      }
+
       setProfile(updated)
       toast.success('Perfil guardado correctamente', {
         description: 'Tus preferencias han sido actualizadas.',
@@ -114,8 +164,9 @@ export default function EditarPerfilPage() {
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
-              El servidor aún no ofrece una actualización parcial de perfil, así que esta pantalla
-              guarda (o reinicia) tu perfil cultural completo.
+              {profile
+                ? 'Los cambios se guardan directamente en tu perfil cultural.'
+                : 'Aún no tienes un perfil cultural; al guardar lo crearemos con estas preferencias.'}
             </AlertDescription>
           </Alert>
 
