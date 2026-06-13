@@ -5,16 +5,18 @@
 // Backend reality:
 //  - There is NO single-group endpoint, so we fetch a page of groups and find
 //    the requested one by id (best effort given the current API surface).
-//  - There are NO endpoints for membership (join/leave), forum posts, events,
-//    or member lists. Those tabs are rendered from the isolated demo-data module
-//    and are clearly marked "en desarrollo" so users are not misled.
+//  - Joining IS supported: POST /groups/:id/members (the user id comes from the
+//    JWT server-side), so the "Unirse al grupo" action is real.
+//  - There are still NO endpoints for leaving, forum posts, events, or member
+//    lists. Those tabs are rendered from the isolated demo-data module and are
+//    clearly marked "en desarrollo" so users are not misled.
 //  - The only real relationship a user has to a group is `created_by`, which we
 //    use to show an "owner" badge.
 //
-// When the backend ships these endpoints, replace the demo sections with real
-// `lib/api` calls and delete lib/demo-data.ts.
+// When the backend ships the remaining endpoints, replace the demo sections
+// with real `lib/api` calls and delete lib/demo-data.ts.
 
-import { use } from 'react'
+import { use, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
@@ -25,8 +27,9 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { EmptyState } from '@/components/empty-state'
+import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context'
-import { listGroups, ApiError } from '@/lib/api'
+import { listGroups, joinGroup, ApiError } from '@/lib/api'
 import { mapGroup, depthLevelLabel, initialsFrom } from '@/lib/view-models'
 import { DEMO_MEMBERS, DEMO_POSTS, DEMO_EVENTS } from '@/lib/demo-data'
 import {
@@ -44,6 +47,8 @@ import {
   Video,
   MapPin,
   AlertCircle,
+  UserPlus,
+  Loader2,
 } from 'lucide-react'
 
 const roleIcons = { admin: Crown, moderador: Shield, miembro: User } as const
@@ -73,6 +78,27 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
 
   const group = data?.items.map(mapGroup).find((g) => g.id === groupId)
   const isOwner = group?.createdBy === user?.userId
+
+  const [isJoining, setIsJoining] = useState(false)
+  const [hasJoined, setHasJoined] = useState(false)
+
+  const handleJoin = async () => {
+    setIsJoining(true)
+    try {
+      await joinGroup(groupId)
+      setHasJoined(true)
+      toast.success('Te uniste al grupo', {
+        description: 'Ahora formas parte de esta comunidad.',
+      })
+    } catch (err) {
+      toast.error('No pudimos unirte al grupo', {
+        description:
+          err instanceof ApiError ? err.message : 'Intenta nuevamente en unos momentos.',
+      })
+    } finally {
+      setIsJoining(false)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -154,6 +180,29 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
                 </Badge>
               ))}
             </div>
+
+            {!isOwner && (
+              <div className="mt-6">
+                <Button onClick={handleJoin} disabled={isJoining || hasJoined}>
+                  {isJoining ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Uniéndote...
+                    </>
+                  ) : hasJoined ? (
+                    <>
+                      <Users className="w-4 h-4 mr-2" />
+                      Ya eres miembro
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-4 h-4 mr-2" />
+                      Unirse al grupo
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </div>
