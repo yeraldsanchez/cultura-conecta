@@ -2,35 +2,40 @@
 
 // "Mis grupos" page.
 //
-// Backend-aligned: the API has no membership/join endpoints, so the only
-// user<->group relationship that exists is `created_by`. This page therefore
-// shows the groups the current user created. We fetch a page of groups and
-// filter by created_by client-side (there is no server-side "owner" filter).
+// Backend-aligned: GET /users/:id/groups returns every group the current user
+// created OR joined, along with their role in each ("admin" for groups they
+// created, "member" once they join someone else's group). This is the real
+// created+joined relationship — unlike `created_by` alone.
+//
+// Structure follows the reference design: an "Todos" tab with every group the
+// user belongs to, and an "Administro" tab scoped to the groups where their
+// role is "admin".
 
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { GroupCard } from '@/components/group-card'
 import { EmptyState } from '@/components/empty-state'
 import { useAuth } from '@/lib/auth-context'
-import { listGroups, ApiError } from '@/lib/api'
-import { mapGroup } from '@/lib/view-models'
-import { Plus, AlertCircle } from 'lucide-react'
+import { getGroupsByMember, ApiError } from '@/lib/api'
+import { mapUserGroup } from '@/lib/view-models'
+import { Plus, Users, Crown, AlertCircle } from 'lucide-react'
 
 export default function MisGruposPage() {
   const router = useRouter()
   const { user } = useAuth()
 
-  const { data, error, isLoading } = useSWR(['my-groups'], () =>
-    listGroups({ page: 1, limit: 50 }),
+  const { data, error, isLoading } = useSWR(user ? ['user-groups', user.userId] : null, () =>
+    getGroupsByMember(user!.userId),
   )
 
-  const myGroups = (data?.items ?? [])
-    .map(mapGroup)
-    .filter((g) => g.createdBy === user?.userId)
+  const userGroups = (data ?? []).map(mapUserGroup)
+  const adminGroups = userGroups.filter((g) => g.role === 'admin')
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-5xl">
@@ -38,7 +43,7 @@ export default function MisGruposPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
         <div>
           <h1 className="font-serif text-3xl font-bold text-foreground">Mis grupos</h1>
-          <p className="text-muted-foreground mt-1">Grupos que has creado en la comunidad</p>
+          <p className="text-muted-foreground mt-1">Gestiona los grupos a los que perteneces</p>
         </div>
         <Link href="/crear-grupo">
           <Button>
@@ -68,26 +73,71 @@ export default function MisGruposPage() {
             </div>
           </CardContent>
         </Card>
-      ) : myGroups.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {myGroups.map((group) => (
-            <GroupCard
-              key={group.id}
-              group={group}
-              isOwner
-              onView={() => router.push(`/grupo/${group.id}`)}
-            />
-          ))}
-        </div>
+      ) : userGroups.length > 0 ? (
+        <Tabs defaultValue="todos">
+          <TabsList className="mb-6">
+            <TabsTrigger value="todos" className="gap-2">
+              <Users className="w-4 h-4" />
+              Todos
+              <Badge variant="secondary" className="ml-1">
+                {userGroups.length}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="admin" className="gap-2">
+              <Crown className="w-4 h-4" />
+              Administro
+              <Badge variant="secondary" className="ml-1">
+                {adminGroups.length}
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="todos">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {userGroups.map((group) => (
+                <GroupCard
+                  key={group.id}
+                  group={group}
+                  role={group.role}
+                  isOwner={group.createdBy === user?.userId}
+                  onView={() => router.push(`/grupo/${group.id}`)}
+                />
+              ))}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="admin">
+            {adminGroups.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {adminGroups.map((group) => (
+                  <GroupCard
+                    key={group.id}
+                    group={group}
+                    role={group.role}
+                    isOwner={group.createdBy === user?.userId}
+                    onView={() => router.push(`/grupo/${group.id}`)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                type="no-groups"
+                title="No administras ningún grupo"
+                description="Crea tu primer grupo y conviértete en administrador."
+                action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
+              />
+            )}
+          </TabsContent>
+        </Tabs>
       ) : (
         <Card className="border-border/50">
           <CardContent className="py-12">
             <EmptyState
               type="no-groups"
-              title="Todavía no has creado ningún grupo"
-              description="Crea tu primer grupo y reúne a personas que comparten tus intereses culturales. Cuando crees grupos, aparecerán aquí."
-              action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
-              secondaryAction={{ label: 'Explorar grupos', onClick: () => router.push('/explorar') }}
+              title="Todavía no perteneces a ningún grupo"
+              description="Explora grupos compatibles con tus intereses o crea el tuyo propio. Cuando te unas a un grupo o crees uno, aparecerá aquí."
+              action={{ label: 'Explorar grupos', onClick: () => router.push('/explorar') }}
+              secondaryAction={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
             />
           </CardContent>
         </Card>

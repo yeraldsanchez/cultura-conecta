@@ -6,15 +6,16 @@
 //  - calls the real /auth/login + /auth/register endpoints,
 //  - persists the access + refresh tokens (via lib/api token helpers) and
 //    decodes the user id from the access token,
-//  - hydrates the session from localStorage on mount,
+//  - hydrates the session from localStorage on mount (instant render) — the
+//    authenticated layout then refreshes the profile from the server via
+//    GET /users/:id (see app/(authenticated)/layout.tsx), since that endpoint
+//    exists and a cache-only profile would go stale across devices/browsers,
 //  - revokes the refresh token server-side on logout (/auth/logout),
-//  - reacts to refresh failures (expired/revoked session) by resetting state,
-//  - tracks the profile created during onboarding (POST /users) so the UI can
-//    show name + cultural preferences without a profile-fetch endpoint.
+//  - reacts to refresh failures (expired/revoked session) by resetting state.
 //
-// IMPORTANT: the backend has no "get profile" endpoint yet, so a profile that
-// was created in a previous session cannot be re-fetched. We therefore cache
-// the last known profile alongside the token. See TODO(api) markers below.
+// login() below still falls back to the cached profile rather than awaiting a
+// profile fetch itself, so a slow/flaky GET /users/:id never blocks sign-in —
+// the layout's background refresh corrects it moments later either way.
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import {
@@ -129,7 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTokens()
       throw new ApiError("No se pudo leer la sesión del token recibido.", 0)
     }
-    // No profile-fetch endpoint: reuse a cached profile only if it matches this user.
+    // Optimistic profile: reuse the cached one if it matches this user so the
+    // UI has something to render immediately. The authenticated layout's
+    // background GET /users/:id refresh corrects this moments after login.
     const cached = readCachedProfile()
     const profile = cached && cached.user_id === id ? cached : null
     if (!profile) writeCachedProfile(null)

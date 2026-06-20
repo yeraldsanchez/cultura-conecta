@@ -2,12 +2,13 @@
 
 // Profile page.
 //
-// Backend-aligned: there is NO GET-profile endpoint, so we render the session
-// profile captured during onboarding (POST /users) and cached by the auth
-// context. If the user logged in on a device where the profile was never
-// created in-session, we show a notice instead of fabricating data.
-// "Mis grupos" uses the real created_by relationship. Events/attendance have no
-// backend endpoint and are intentionally not shown here.
+// Backend-aligned: GET /users/:id now exists and is fetched in the background
+// by the authenticated layout, so `user.profile` here reflects the server,
+// not just a local cache. A null profile just means onboarding was never
+// completed for this account — not a backend limitation.
+// "Mis grupos" uses GET /users/:id/groups — every group the user created OR
+// joined, not just `created_by`. Events/attendance have no backend endpoint
+// and are intentionally not shown here.
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -19,16 +20,18 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { GroupCard } from '@/components/group-card'
 import { EmptyState } from '@/components/empty-state'
 import { useAuth } from '@/lib/auth-context'
-import { listGroups } from '@/lib/api'
-import { mapGroup, depthLevelLabel, initialsFrom } from '@/lib/view-models'
+import { getGroupsByMember } from '@/lib/api'
+import { mapUserGroup, depthLevelLabel, initialsFrom } from '@/lib/view-models'
 import { Mail, Edit, Users, ArrowRight, Layers, Heart, Info } from 'lucide-react'
 
 export default function PerfilPage() {
   const router = useRouter()
   const { user } = useAuth()
 
-  const { data } = useSWR(['profile-groups'], () => listGroups({ page: 1, limit: 50 }))
-  const myGroups = (data?.items ?? []).map(mapGroup).filter((g) => g.createdBy === user?.userId)
+  const { data } = useSWR(user ? ['user-groups', user.userId] : null, () =>
+    getGroupsByMember(user!.userId),
+  )
+  const myGroups = (data ?? []).map(mapUserGroup)
 
   if (!user) return null
 
@@ -133,7 +136,7 @@ export default function PerfilPage() {
                 <div className="text-center">
                   <p className="text-4xl font-serif font-bold text-primary">{myGroups.length}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {myGroups.length === 1 ? 'Grupo creado' : 'Grupos creados'}
+                    {myGroups.length === 1 ? 'Grupo' : 'Grupos'} al que perteneces
                   </p>
                 </div>
               </CardContent>
@@ -146,11 +149,10 @@ export default function PerfilPage() {
             <div className="flex items-start gap-3">
               <Info className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-foreground">Perfil cultural no disponible</p>
+                <p className="font-medium text-foreground">Aún no configuraste tu perfil cultural</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Tu perfil cultural se crea durante el onboarding. Como la API aún no expone una
-                  consulta de perfil, no podemos recuperarlo en esta sesión. Puedes (re)configurarlo
-                  desde la edición de perfil.
+                  Completa tus intereses, enfoques y nivel de profundidad para recibir mejores
+                  sugerencias de grupos.
                 </p>
                 <Button className="mt-4" onClick={() => router.push('/perfil/editar')}>
                   Configurar perfil
@@ -184,7 +186,8 @@ export default function PerfilPage() {
               <GroupCard
                 key={group.id}
                 group={group}
-                isOwner
+                role={group.role}
+                isOwner={group.createdBy === user?.userId}
                 onView={() => router.push(`/grupo/${group.id}`)}
               />
             ))}
@@ -194,8 +197,8 @@ export default function PerfilPage() {
             <CardContent className="py-8">
               <EmptyState
                 type="no-groups"
-                description="Aún no has creado grupos."
-                action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
+                description="Aún no perteneces a ningún grupo."
+                action={{ label: 'Explorar grupos', onClick: () => router.push('/explorar') }}
               />
             </CardContent>
           </Card>
