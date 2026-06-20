@@ -2,7 +2,13 @@
 // consumes. Keeping the mapping here means components never depend on the exact
 // backend JSON layout, and any future backend change is absorbed in one place.
 
-import type { GroupDTO, CatalogItem } from "@/lib/api"
+import type {
+  GroupDTO,
+  CatalogItem,
+  UserGroupDTO,
+  GroupMemberDTO,
+  PostDTO,
+} from "@/lib/api"
 
 // --- Depth level -----------------------------------------------------------
 // The backend stores `depth_level` as a free-form string, so the frontend owns
@@ -72,4 +78,77 @@ export function initialsFrom(nameOrEmail: string | undefined | null): string {
       .toUpperCase()
       .slice(0, 2) || "U"
   )
+}
+
+// --- Membership (groups a user created or joined) ---------------------------
+// `GET /users/:id/groups` returns every group the user belongs to, with their
+// role in it ("admin" for groups they created, "member" once they join, and —
+// per the DB schema, though the API never assigns it yet — "moderator").
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrador",
+  moderator: "Moderador",
+  member: "Miembro",
+}
+
+export function roleLabel(role: string | null | undefined): string {
+  if (!role) return "Miembro"
+  return ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1)
+}
+
+export interface UserGroupVM extends GroupVM {
+  role: string
+  joinedAt: string
+}
+
+export function mapUserGroup(dto: UserGroupDTO): UserGroupVM {
+  return {
+    ...mapGroup(dto),
+    role: dto.role,
+    joinedAt: dto.joined_at,
+  }
+}
+
+// --- Group members -----------------------------------------------------------
+
+export interface GroupMemberVM {
+  userId: number
+  name: string | null
+  role: string
+  joinedAt: string
+}
+
+export function mapGroupMember(dto: GroupMemberDTO): GroupMemberVM {
+  return {
+    userId: dto.user_id,
+    name: dto.name,
+    role: dto.role,
+    joinedAt: dto.joined_at,
+  }
+}
+
+// --- Forum posts --------------------------------------------------------------
+// NOTE: there is no endpoint to list historical posts (see lib/api/endpoints.ts),
+// so this view model only ever maps posts created in the current session.
+
+export interface PostVM {
+  id: number
+  groupId: number
+  userId: number
+  content: string
+  hasSpoiler: boolean
+  spoilerProgress: string | null
+  createdAt: string
+}
+
+export function mapPost(dto: PostDTO): PostVM {
+  return {
+    id: dto.id,
+    groupId: dto.group_id,
+    userId: dto.user_id,
+    content: dto.content,
+    hasSpoiler: dto.has_spoiler,
+    spoilerProgress: dto.spoiler_progress,
+    createdAt: dto.created_at,
+  }
 }
