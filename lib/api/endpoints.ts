@@ -1,9 +1,9 @@
 // Typed bindings for every CulturaConecta backend endpoint.
 //
-// These mirror the Go service output structs exactly. Endpoints not yet exposed
-// by the backend (single group fetch, leave group, members list, forum, events)
-// intentionally have no function here — those flows fall back to clearly-marked
-// local mock data in the app layer.
+// These mirror the Go service output structs exactly. Endpoints still not
+// exposed by the backend at all (single group fetch, leave group, forum
+// listing, events) intentionally have no function here — those flows fall
+// back to clearly-marked local mock data in the app layer.
 
 import { apiRequest } from "./client"
 
@@ -275,4 +275,87 @@ export async function joinGroup(groupId: number): Promise<void> {
   await apiRequest<void>(`/groups/${groupId}/members`, {
     method: "POST",
   })
+}
+
+// Suggested groups for the authenticated user (matches their depth level,
+// interests and focus types, excluding groups they already belong to). The
+// user id is taken from the JWT server-side.
+export interface ListSuggestedGroupsParams {
+  page?: number
+  limit?: number
+}
+
+export async function getSuggestedGroups(
+  params: ListSuggestedGroupsParams = {},
+): Promise<PaginatedGroups> {
+  const data = await apiRequest<PaginatedGroups>("/groups/suggestions", {
+    query: { page: params.page, limit: params.limit },
+  })
+  return {
+    items: data.items ?? [],
+    total_count: data.total_count ?? 0,
+    page: data.page ?? 1,
+    limit: data.limit ?? 10,
+  }
+}
+
+// Groups the given user belongs to (created or joined), with their role and
+// join date. This is the real created+joined relationship — unlike `created_by`
+// alone, it also includes groups the user joined without creating them.
+export interface UserGroupDTO extends GroupDTO {
+  role: string
+  joined_at: string
+}
+
+export async function getGroupsByMember(userId: number): Promise<UserGroupDTO[]> {
+  const data = await apiRequest<{ groups: UserGroupDTO[] }>(`/users/${userId}/groups`)
+  return data.groups ?? []
+}
+
+// Members of a group (protected: requires an authenticated session, not
+// necessarily membership in that specific group).
+export interface GroupMemberDTO {
+  user_id: number
+  name: string | null
+  role: string
+  joined_at: string
+}
+
+export async function getGroupMembers(groupId: number): Promise<GroupMemberDTO[]> {
+  const data = await apiRequest<{ members: GroupMemberDTO[] }>(`/groups/${groupId}/members`)
+  return data.members ?? []
+}
+
+// --- Group forum posts ------------------------------------------------------
+// NOTE: the backend can create posts but has no endpoint to list them yet, so
+// there is no `getPosts`. Posts created in the current session are kept in
+// local component state — see the group detail page for the "no hay listado"
+// notice shown alongside them.
+
+export interface PostDTO {
+  id: number
+  group_id: number
+  user_id: number
+  content: string
+  has_spoiler: boolean
+  spoiler_progress: string | null
+  created_at: string
+}
+
+export interface CreatePostInput {
+  content: string
+  has_spoiler?: boolean
+  spoiler_progress?: string | null
+}
+
+export async function createPost(groupId: number, input: CreatePostInput): Promise<PostDTO> {
+  const data = await apiRequest<{ post: PostDTO }>(`/groups/${groupId}/posts`, {
+    method: "POST",
+    body: {
+      content: input.content,
+      has_spoiler: input.has_spoiler ?? false,
+      spoiler_progress: input.spoiler_progress ?? null,
+    },
+  })
+  return data.post
 }

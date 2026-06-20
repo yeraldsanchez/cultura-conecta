@@ -4,18 +4,41 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Film, ArrowRight, Layers } from 'lucide-react'
+import { Film, ArrowRight, Layers, Crown, Shield, User } from 'lucide-react'
 import type { GroupVM } from '@/lib/view-models'
-import { depthLevelLabel } from '@/lib/view-models'
+import { depthLevelLabel, roleLabel } from '@/lib/view-models'
 
 interface GroupCardProps {
   group: GroupVM
   onView?: () => void
   isOwner?: boolean
+  // When known (e.g. from GET /users/:id/groups), renders a role-aware
+  // membership badge ("Administrador" / "Moderador" / "Miembro") instead of
+  // the generic "Creado por ti" pill.
+  role?: string | null
   variant?: 'default' | 'compact' | 'featured'
 }
 
-export function GroupCard({ group, onView, isOwner, variant = 'default' }: GroupCardProps) {
+const ROLE_ICONS: Record<string, typeof Crown> = {
+  admin: Crown,
+  moderator: Shield,
+  member: User,
+}
+
+function MembershipBadge({ isOwner, role }: { isOwner?: boolean; role?: string | null }) {
+  if (!isOwner && !role) return null
+  const effectiveRole = role ?? 'admin'
+  const Icon = ROLE_ICONS[effectiveRole] ?? User
+  const label = isOwner ? 'Creado por ti' : roleLabel(role)
+  return (
+    <Badge variant="secondary" className="text-[10px] shrink-0 gap-1">
+      <Icon className="w-3 h-3" />
+      {label}
+    </Badge>
+  )
+}
+
+export function GroupCard({ group, onView, isOwner, role, variant = 'default' }: GroupCardProps) {
   const focusTypes = group.focusTypes ?? []
 
   if (variant === 'compact') {
@@ -96,11 +119,7 @@ export function GroupCard({ group, onView, isOwner, variant = 'default' }: Group
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="font-serif text-lg font-semibold text-foreground leading-tight">{group.name}</h3>
-              {isOwner && (
-                <Badge variant="secondary" className="text-[10px] shrink-0">
-                  Creado por ti
-                </Badge>
-              )}
+              <MembershipBadge isOwner={isOwner} role={role} />
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">{group.workTitle}</p>
           </div>

@@ -2,13 +2,14 @@
 
 // Dashboard / home for authenticated users.
 //
-// Backend-aligned: the API exposes group listing (GET /groups) and the catalog,
-// but has NO membership/join, events, or profile-fetch endpoints. Therefore:
-//   - Profile summary comes from the session profile cached at onboarding.
-//   - "Grupos sugeridos" are real groups from GET /groups (excluding ones the
-//     user created, which are surfaced under "Mis grupos").
-//   - "Mis grupos" == groups created by the current user (created_by), the only
-//     user<->group relationship the backend currently models.
+// Backend-aligned:
+//   - "Grupos para descubrir" comes from GET /groups/suggestions — the backend
+//     matches the user's depth level, interests and focus types and already
+//     excludes groups the user belongs to. Requires a cultural profile to
+//     return anything (it joins against user_profiles).
+//   - "Mis grupos" comes from GET /users/:id/groups — every group the user
+//     created OR joined, with their role in each. This is the real
+//     created+joined relationship, not just `created_by`.
 //   - Events are intentionally omitted (no backend endpoint yet).
 
 import Link from 'next/link'
@@ -21,26 +22,36 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { GroupCard } from '@/components/group-card'
 import { EmptyState } from '@/components/empty-state'
 import { useAuth } from '@/lib/auth-context'
-import { listGroups, ApiError } from '@/lib/api'
-import { mapGroup, depthLevelLabel } from '@/lib/view-models'
+import { getSuggestedGroups, getGroupsByMember, ApiError } from '@/lib/api'
+import { mapGroup, mapUserGroup, depthLevelLabel } from '@/lib/view-models'
 import { Plus, Search, ArrowRight, Sparkles, Users, AlertCircle, Layers } from 'lucide-react'
 
 export default function DashboardPage() {
   const router = useRouter()
   const { user } = useAuth()
 
-  // Pull a generous page so we can split owned vs. suggested client-side.
-  const { data, error, isLoading } = useSWR(['dashboard-groups'], () =>
-    listGroups({ page: 1, limit: 50 }),
+  const {
+    data: suggestedData,
+    error: suggestedError,
+    isLoading: suggestedLoading,
+  } = useSWR(user ? ['dashboard-suggestions', user.userId] : null, () =>
+    getSuggestedGroups({ page: 1, limit: 6 }),
   )
 
-  const allGroups = (data?.items ?? []).map(mapGroup)
-  const myGroups = allGroups.filter((g) => g.createdBy === user?.userId)
-  const suggestedGroups = allGroups.filter((g) => g.createdBy !== user?.userId)
+  const {
+    data: myGroupsData,
+    error: myGroupsError,
+    isLoading: myGroupsLoading,
+  } = useSWR(user ? ['user-groups', user.userId] : null, () => getGroupsByMember(user!.userId))
+
+  const suggestedGroups = (suggestedData?.items ?? []).map(mapGroup)
+  const myGroups = (myGroupsData ?? []).map(mapUserGroup)
 
   const profile = user?.profile ?? null
   const interests = profile?.interests ?? []
   const focusTypes = profile?.focus_types ?? []
+
+  const isLoading = suggestedLoading || myGroupsLoading
 
   if (isLoading) {
     return <DashboardSkeleton />
@@ -124,102 +135,124 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {error ? (
-        <Card className="border-destructive/30">
-          <CardContent className="p-6 flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-            <div>
-              <p className="font-medium text-foreground">No pudimos cargar los grupos</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {error instanceof ApiError ? error.message : 'Verifica tu conexión con el servidor.'}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          {/* Suggested groups */}
-          <section className="mb-10">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-primary" />
-                <h2 className="font-serif text-xl font-semibold text-foreground">
-                  Grupos para descubrir
-                </h2>
-              </div>
-              <Link href="/explorar">
-                <Button variant="ghost" size="sm" className="text-primary">
-                  Ver todos
-                  <ArrowRight className="w-4 h-4 ml-1" />
-                </Button>
-              </Link>
-            </div>
+      {/* Suggested groups */}
+      <section className="mb-10">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-primary" />
+            <h2 className="font-serif text-xl font-semibold text-foreground">
+              Grupos para descubrir
+            </h2>
+          </div>
+          <Link href="/explorar">
+            <Button variant="ghost" size="sm" className="text-primary">
+              Ver todos
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          </Link>
+        </div>
 
-            {suggestedGroups.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {suggestedGroups.slice(0, 6).map((group) => (
-                  <GroupCard
-                    key={group.id}
-                    group={group}
-                    variant="featured"
-                    onView={() => router.push(`/grupo/${group.id}`)}
-                  />
-                ))}
+        {suggestedError ? (
+          <Card className="border-destructive/30">
+            <CardContent className="p-6 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-foreground">No pudimos cargar las sugerencias</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {suggestedError instanceof ApiError
+                    ? suggestedError.message
+                    : 'Verifica tu conexión con el servidor.'}
+                </p>
               </div>
-            ) : (
+            </CardContent>
+          </Card>
+        ) : suggestedGroups.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {suggestedGroups.slice(0, 6).map((group) => (
+              <GroupCard
+                key={group.id}
+                group={group}
+                variant="featured"
+                onView={() => router.push(`/grupo/${group.id}`)}
+              />
+            ))}
+          </div>
+        ) : !profile ? (
+          <EmptyState
+            type="incomplete-profile"
+            title="Completa tu perfil cultural"
+            description="Las sugerencias se calculan según tus intereses, enfoques y nivel de profundidad. Configura tu perfil para empezar a recibirlas."
+            action={{ label: 'Configurar perfil', onClick: () => router.push('/perfil/editar') }}
+            secondaryAction={{ label: 'Explorar', onClick: () => router.push('/explorar') }}
+          />
+        ) : (
+          <EmptyState
+            type="no-groups"
+            title="Aún no tenemos sugerencias para ti"
+            description="No encontramos grupos que coincidan con tu perfil cultural todavía. Explora el catálogo completo o crea tu propio grupo."
+            action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
+            secondaryAction={{ label: 'Explorar', onClick: () => router.push('/explorar') }}
+          />
+        )}
+      </section>
+
+      {/* My groups (created + joined) */}
+      <section>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-2">
+            <Users className="w-5 h-5 text-secondary" />
+            <h2 className="font-serif text-xl font-semibold text-foreground">Mis grupos</h2>
+          </div>
+          {myGroups.length > 0 && (
+            <Link href="/mis-grupos">
+              <Button variant="ghost" size="sm" className="text-primary">
+                Ver todos
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            </Link>
+          )}
+        </div>
+
+        {myGroupsError ? (
+          <Card className="border-destructive/30">
+            <CardContent className="p-6 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-foreground">No pudimos cargar tus grupos</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {myGroupsError instanceof ApiError
+                    ? myGroupsError.message
+                    : 'Verifica tu conexión con el servidor.'}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : myGroups.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {myGroups.slice(0, 3).map((group) => (
+              <GroupCard
+                key={group.id}
+                group={group}
+                role={group.role}
+                isOwner={group.createdBy === user?.userId}
+                onView={() => router.push(`/grupo/${group.id}`)}
+              />
+            ))}
+          </div>
+        ) : (
+          <Card className="border-border/50">
+            <CardContent className="py-8">
               <EmptyState
                 type="no-groups"
-                title="Aún no hay grupos para mostrar"
-                description="Sé de los primeros en crear un grupo cultural en la comunidad."
-                action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
-                secondaryAction={{ label: 'Explorar', onClick: () => router.push('/explorar') }}
+                title="Todavía no perteneces a ningún grupo"
+                description="Únete a un grupo que te interese o crea el tuyo propio para reunir a personas con tus mismos intereses culturales."
+                action={{ label: 'Explorar grupos', onClick: () => router.push('/explorar') }}
+                secondaryAction={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
               />
-            )}
-          </section>
-
-          {/* My groups */}
-          <section>
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-secondary" />
-                <h2 className="font-serif text-xl font-semibold text-foreground">Mis grupos</h2>
-              </div>
-              {myGroups.length > 0 && (
-                <Link href="/mis-grupos">
-                  <Button variant="ghost" size="sm" className="text-primary">
-                    Ver todos
-                    <ArrowRight className="w-4 h-4 ml-1" />
-                  </Button>
-                </Link>
-              )}
-            </div>
-
-            {myGroups.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {myGroups.slice(0, 3).map((group) => (
-                  <GroupCard
-                    key={group.id}
-                    group={group}
-                    isOwner
-                    onView={() => router.push(`/grupo/${group.id}`)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <Card className="border-border/50">
-                <CardContent className="py-8">
-                  <EmptyState
-                    type="no-groups"
-                    title="Todavía no has creado grupos"
-                    description="Crea un grupo para reunir a personas con tus mismos intereses culturales."
-                    action={{ label: 'Crear grupo', onClick: () => router.push('/crear-grupo') }}
-                  />
-                </CardContent>
-              </Card>
-            )}
-          </section>
-        </>
-      )}
+            </CardContent>
+          </Card>
+        )}
+      </section>
     </div>
   )
 }
