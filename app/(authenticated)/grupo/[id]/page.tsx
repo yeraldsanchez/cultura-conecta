@@ -25,8 +25,9 @@
 import { use, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { format } from 'date-fns'
+import { format, formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -85,6 +86,8 @@ import {
   Video,
   MapPin,
   AlertCircle,
+  AlertTriangle,
+  ChevronDown,
   UserPlus,
   Loader2,
   Plus,
@@ -764,23 +767,78 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
 }
 
 function PostCard({ post, authorName }: { post: PostVM; authorName?: string }) {
+  const [spoilerRevealed, setSpoilerRevealed] = useState(false)
+  const isHidden = post.hasSpoiler && !spoilerRevealed
+
   return (
     <Card className="border-border/50">
-      <CardContent className="pt-6">
-        <div className="flex items-center gap-3 mb-3">
-          <Avatar className="w-9 h-9">
-            <AvatarFallback className="bg-muted text-muted-foreground text-xs">
+      <CardContent className="p-5">
+        {/* Author info */}
+        <div className="flex items-center gap-3 mb-4">
+          <Avatar className="w-10 h-10 bg-primary/10">
+            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
               {initialsFrom(authorName)}
             </AvatarFallback>
           </Avatar>
-          <span className="font-medium text-foreground text-sm">{authorName || 'Tú'}</span>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm text-foreground">{authorName || 'Tú'}</p>
+            <p className="text-xs text-muted-foreground">
+              {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true, locale: es })}
+            </p>
+          </div>
           {post.hasSpoiler && (
-            <Badge variant="outline" className="text-xs">
-              Spoiler: {post.spoilerProgress || 'no especificado'}
+            <Badge
+              variant="destructive"
+              className="shrink-0 bg-destructive/10 text-destructive border-destructive/20"
+            >
+              <AlertTriangle className="w-3 h-3 mr-1" />
+              Spoiler
             </Badge>
           )}
         </div>
-        <p className="text-sm text-muted-foreground leading-relaxed">{post.content}</p>
+
+        {/* Content */}
+        {isHidden ? (
+          <div className="bg-muted/50 rounded-lg p-4 border border-border/50">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium text-sm text-foreground">
+                  Esta publicación contiene spoilers
+                </p>
+                {post.spoilerProgress && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Progreso requerido:{' '}
+                    <span className="font-medium">{post.spoilerProgress}</span>
+                  </p>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => setSpoilerRevealed(true)}
+                >
+                  <ChevronDown className="w-4 h-4 mr-1.5" />
+                  Ver spoiler
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              'text-sm text-foreground leading-relaxed',
+              post.hasSpoiler && 'bg-muted/30 rounded-lg p-4 border border-destructive/20',
+            )}
+          >
+            {post.hasSpoiler && spoilerRevealed && (
+              <Badge variant="destructive" className="mb-2 bg-destructive/10 text-destructive text-xs">
+                ⚠️ Contenido con spoilers
+              </Badge>
+            )}
+            <p>{post.content}</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
