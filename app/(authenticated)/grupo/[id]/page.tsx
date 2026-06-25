@@ -10,22 +10,20 @@
 //    suggestion or something found through /explorar) do we fall back to a
 //    page of GET /groups and search by id.
 //  - Joining IS supported: POST /groups/:id/members.
-//  - Members ARE supported: GET /groups/:id/members — real data, no more mock.
-//  - The forum can CREATE posts (POST /groups/:id/posts) but the backend has
-//    no endpoint to LIST them, so only posts created during this session are
-//    shown (with a clear notice explaining why history isn't available).
-//  - There is still NO endpoint for leaving a group or for events at all.
-//    The Eventos tab is rendered from the isolated demo-data module and is
-//    clearly marked "en desarrollo" so users are not misled; events created
-//    there only live in local state for the current session.
-//
-// When the backend ships the remaining endpoints, replace the demo sections
-// with real `lib/api` calls and delete lib/demo-data.ts.
+//  - Members ARE supported: GET /groups/:id/members — real data.
+//  - The forum now supports both creating (POST /groups/:id/posts) AND
+//    listing (GET /groups/:id/posts) — real data, paginated, author name
+//    resolved server-side.
+//  - Events are now fully real: create (POST /groups/:id/events), list
+//    (GET /groups/:id/events), confirm attendance
+//    (POST /groups/:id/events/:event_id/attendees) and list attendees
+//    (GET /groups/:id/events/:event_id/attendees).
+//  - There is still NO endpoint for leaving a group.
 
 import { use, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, isPast } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -34,7 +32,6 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Dialog,
   DialogContent,
@@ -57,6 +54,11 @@ import {
   getGroupsByMember,
   getGroupMembers,
   createPost,
+  listGroupPosts,
+  createEvent,
+  getEvents,
+  confirmAttendance,
+  getEventAttendees,
   ApiError,
 } from '@/lib/api'
 import {
@@ -64,13 +66,14 @@ import {
   mapUserGroup,
   mapGroupMember,
   mapPost,
+  mapEvent,
   depthLevelLabel,
   roleLabel,
   initialsFrom,
   type GroupVM,
   type PostVM,
+  type EventVM,
 } from '@/lib/view-models'
-import { DEMO_EVENTS, type DemoEvent } from '@/lib/demo-data'
 import {
   Users,
   Calendar,
@@ -82,7 +85,6 @@ import {
   User,
   Layers,
   BookOpen,
-  Construction,
   Video,
   MapPin,
   AlertCircle,
@@ -91,6 +93,8 @@ import {
   UserPlus,
   Loader2,
   Plus,
+  CalendarCheck,
+  Link as LinkIcon,
 } from 'lucide-react'
 
 const ROLE_ICONS: Record<string, typeof Crown> = {
@@ -146,6 +150,28 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
 
   const members = (membersData ?? []).map(mapGroupMember)
 
+  // 4. Real forum posts.
+  const {
+    data: postsData,
+    error: postsError,
+    isLoading: postsLoading,
+    mutate: mutatePosts,
+  } = useSWR(group ? ['group-posts', groupId] : null, () =>
+    listGroupPosts(groupId, { page: 1, limit: 50 }),
+  )
+  const posts: PostVM[] = (postsData ?? []).map(mapPost)
+
+  // 5. Real events.
+  const {
+    data: eventsData,
+    error: eventsError,
+    isLoading: eventsLoading,
+    mutate: mutateEvents,
+  } = useSWR(group ? ['group-events', groupId] : null, () => getEvents(groupId))
+  const events: EventVM[] = (eventsData ?? [])
+    .map(mapEvent)
+    .sort((a, b) => new Date(a.eventDate).getTime() - new Date(b.eventDate).getTime())
+
   const [activeTab, setActiveTab] = useState('resumen')
 
   // --- Join ------------------------------------------------------------------
@@ -174,8 +200,7 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
-  // --- Forum: create post (real) — no list endpoint, so only session posts show.
-  const [sessionPosts, setSessionPosts] = useState<PostVM[]>([])
+  // --- Forum: create + list posts (real) --------------------------------------
   const [postDialogOpen, setPostDialogOpen] = useState(false)
   const [newPostContent, setNewPostContent] = useState('')
   const [newPostHasSpoiler, setNewPostHasSpoiler] = useState(false)
@@ -186,18 +211,18 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
     if (!newPostContent.trim()) return
     setIsCreatingPost(true)
     try {
-      const created = await createPost(groupId, {
+      await createPost(groupId, {
         content: newPostContent.trim(),
         has_spoiler: newPostHasSpoiler,
         spoiler_progress: newPostHasSpoiler ? newPostSpoilerProgress.trim() || null : null,
       })
-      setSessionPosts((prev) => [mapPost(created), ...prev])
       setNewPostContent('')
       setNewPostHasSpoiler(false)
       setNewPostSpoilerProgress('')
       setPostDialogOpen(false)
       setActiveTab('foro')
       toast.success('Publicación creada')
+      await mutatePosts()
     } catch (err) {
       toast.error('No pudimos publicar', {
         description:
@@ -208,43 +233,81 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
-  // --- Events: fully mock, no backend support at all. Created events only
-  // live in local state for the current session.
-  const [localEvents, setLocalEvents] = useState<DemoEvent[]>([])
+  // --- Events: create + list (real) -------------------------------------------
   const [eventDialogOpen, setEventDialogOpen] = useState(false)
   const [newEventTitle, setNewEventTitle] = useState('')
   const [newEventDescription, setNewEventDescription] = useState('')
   const [newEventDate, setNewEventDate] = useState('')
   const [newEventTime, setNewEventTime] = useState('')
-  const [newEventModality, setNewEventModality] = useState<'virtual' | 'presencial'>('virtual')
+  const [newEventModality, setNewEventModality] = useState<'virtual' | 'in-person'>('virtual')
   const [newEventLink, setNewEventLink] = useState('')
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false)
 
-  const handleCreateEvent = () => {
+  const handleCreateEvent = async () => {
     if (!newEventTitle.trim() || !newEventDate || !newEventTime) return
-    const event: DemoEvent = {
-      id: Date.now(),
-      title: newEventTitle.trim(),
-      description: newEventDescription.trim() || 'Sin descripción.',
-      date: `${newEventDate}T${newEventTime}:00`,
-      modality: newEventModality,
-      link: newEventModality === 'virtual' ? newEventLink.trim() || undefined : undefined,
+    if (newEventModality === 'virtual' && !newEventLink.trim()) {
+      toast.error('Falta el enlace', {
+        description: 'Los eventos virtuales requieren un enlace de la reunión.',
+      })
+      return
     }
-    setLocalEvents((prev) => [event, ...prev])
-    setNewEventTitle('')
-    setNewEventDescription('')
-    setNewEventDate('')
-    setNewEventTime('')
-    setNewEventModality('virtual')
-    setNewEventLink('')
-    setEventDialogOpen(false)
-    setActiveTab('eventos')
-    toast.info('Evento guardado solo en esta sesión', {
-      description:
-        'La gestión de eventos aún no está integrada con el servidor, así que no se compartirá con el resto del grupo.',
-    })
+    setIsCreatingEvent(true)
+    try {
+      const eventDate = new Date(`${newEventDate}T${newEventTime}:00`).toISOString()
+      await createEvent(groupId, {
+        title: newEventTitle.trim(),
+        description: newEventDescription.trim() || null,
+        event_date: eventDate,
+        modality: newEventModality,
+        link: newEventModality === 'virtual' ? newEventLink.trim() : null,
+      })
+      setNewEventTitle('')
+      setNewEventDescription('')
+      setNewEventDate('')
+      setNewEventTime('')
+      setNewEventModality('virtual')
+      setNewEventLink('')
+      setEventDialogOpen(false)
+      setActiveTab('eventos')
+      toast.success('Evento creado')
+      await mutateEvents()
+    } catch (err) {
+      toast.error('No pudimos crear el evento', {
+        description:
+          err instanceof ApiError ? err.message : 'Intenta nuevamente en unos momentos.',
+      })
+    } finally {
+      setIsCreatingEvent(false)
+    }
   }
 
-  const combinedEvents = [...localEvents, ...DEMO_EVENTS]
+  const [confirmingEventId, setConfirmingEventId] = useState<number | null>(null)
+  const [attendeesByEvent, setAttendeesByEvent] = useState<Record<number, number>>({})
+
+  const handleConfirmAttendance = async (eventId: number) => {
+    setConfirmingEventId(eventId)
+    try {
+      await confirmAttendance(groupId, eventId)
+      toast.success('Asistencia confirmada')
+      try {
+        const attendees = await getEventAttendees(groupId, eventId)
+        setAttendeesByEvent((prev) => ({ ...prev, [eventId]: attendees.length }))
+      } catch {
+        // Non-fatal: the confirmation itself succeeded.
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.info('Ya habías confirmado tu asistencia')
+      } else {
+        toast.error('No pudimos confirmar tu asistencia', {
+          description:
+            err instanceof ApiError ? err.message : 'Intenta nuevamente en unos momentos.',
+        })
+      }
+    } finally {
+      setConfirmingEventId(null)
+    }
+  }
 
   // --- Loading / error / not-found states -------------------------------------
   const isLoading = userGroupsLoading || (needsCatalogFallback && catalogLoading)
@@ -421,14 +484,6 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
                       <DialogTitle>Crear evento</DialogTitle>
                       <DialogDescription>Organiza un encuentro con el grupo</DialogDescription>
                     </DialogHeader>
-                    <Alert className="mt-2">
-                      <Construction className="h-4 w-4" />
-                      <AlertDescription>
-                        La gestión de eventos aún no está integrada con el servidor: este evento
-                        solo se guardará en tu sesión actual y no será visible para el resto del
-                        grupo.
-                      </AlertDescription>
-                    </Alert>
                     <div className="space-y-4 py-4">
                       <div className="space-y-2">
                         <Label htmlFor="event-title">Título del evento *</Label>
@@ -487,9 +542,9 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
                           </Button>
                           <Button
                             type="button"
-                            variant={newEventModality === 'presencial' ? 'default' : 'outline'}
+                            variant={newEventModality === 'in-person' ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => setNewEventModality('presencial')}
+                            onClick={() => setNewEventModality('in-person')}
                             className="flex-1"
                           >
                             <MapPin className="w-4 h-4 mr-2" />
@@ -500,7 +555,7 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
 
                       {newEventModality === 'virtual' && (
                         <div className="space-y-2">
-                          <Label htmlFor="event-link">Enlace de la reunión</Label>
+                          <Label htmlFor="event-link">Enlace de la reunión *</Label>
                           <Input
                             id="event-link"
                             placeholder="https://meet.google.com/..."
@@ -516,9 +571,21 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
                       </Button>
                       <Button
                         onClick={handleCreateEvent}
-                        disabled={!newEventTitle.trim() || !newEventDate || !newEventTime}
+                        disabled={
+                          !newEventTitle.trim() ||
+                          !newEventDate ||
+                          !newEventTime ||
+                          isCreatingEvent
+                        }
                       >
-                        Crear evento
+                        {isCreatingEvent ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Creando...
+                          </>
+                        ) : (
+                          'Crear evento'
+                        )}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -560,7 +627,7 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
             <MessageSquare className="w-4 h-4 mr-2" />
             Foro
             <Badge variant="secondary" className="ml-2 text-xs">
-              {sessionPosts.length}
+              {posts.length}
             </Badge>
           </TabsTrigger>
           <TabsTrigger
@@ -570,7 +637,7 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
             <Calendar className="w-4 h-4 mr-2" />
             Eventos
             <Badge variant="secondary" className="ml-2 text-xs">
-              {combinedEvents.length}
+              {events.length}
             </Badge>
           </TabsTrigger>
           <TabsTrigger
@@ -619,8 +686,8 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
             </CardContent>
           </Card>
 
-          {/* Recent activity (session-only posts) */}
-          {sessionPosts.length > 0 && (
+          {/* Recent activity */}
+          {posts.length > 0 && (
             <Card className="border-border/50">
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-lg">Actividad reciente</CardTitle>
@@ -629,73 +696,107 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
                 </Button>
               </CardHeader>
               <CardContent className="space-y-4">
-                {sessionPosts.slice(0, 2).map((post) => (
-                  <PostCard key={post.id} post={post} authorName={user?.name} />
+                {posts.slice(0, 2).map((post) => (
+                  <PostCard key={post.id} post={post} fallbackName={user?.name} />
                 ))}
               </CardContent>
             </Card>
           )}
 
-          {/* Upcoming events (demo) */}
-          <Card className="border-border/50">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-lg">Próximos eventos</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => setActiveTab('eventos')}>
-                Ver todo
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {combinedEvents.slice(0, 2).map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </CardContent>
-          </Card>
+          {/* Upcoming events */}
+          {events.length > 0 && (
+            <Card className="border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-lg">Próximos eventos</CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => setActiveTab('eventos')}>
+                  Ver todo
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {events.slice(0, 2).map((event) => (
+                  <EventCard
+                    key={event.id}
+                    event={event}
+                    isMember={isMember}
+                    attendeeCount={attendeesByEvent[event.id]}
+                    isConfirming={confirmingEventId === event.id}
+                    onConfirm={() => handleConfirmAttendance(event.id)}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* Foro */}
         <TabsContent value="foro" className="space-y-4">
-          <Alert>
-            <Info className="h-4 w-4" />
-            <AlertDescription>
-              Las publicaciones nuevas sí se guardan en el servidor, pero el backend todavía no
-              expone un endpoint para listar publicaciones anteriores. Por eso solo verás aquí las
-              que se hayan creado durante esta sesión.
-            </AlertDescription>
-          </Alert>
-
-          {sessionPosts.length > 0 ? (
-            sessionPosts.map((post) => <PostCard key={post.id} post={post} authorName={user?.name} />)
+          {postsError ? (
+            <Card className="border-destructive/30">
+              <CardContent className="p-6 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-foreground">No pudimos cargar el foro</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {postsError instanceof ApiError ? postsError.message : 'Verifica tu conexión.'}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : postsLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-32 w-full" />
+              ))}
+            </div>
+          ) : posts.length > 0 ? (
+            posts.map((post) => <PostCard key={post.id} post={post} fallbackName={user?.name} />)
           ) : (
             <EmptyState
               type="no-posts"
-              title="Aún no hay publicaciones en esta sesión"
+              action={isMember ? { label: 'Crear publicación', onClick: () => setPostDialogOpen(true) } : undefined}
               description={
                 isMember
                   ? 'Sé el primero en iniciar una conversación.'
                   : 'Únete al grupo para participar en el foro.'
               }
-              action={isMember ? { label: 'Crear publicación', onClick: () => setPostDialogOpen(true) } : undefined}
             />
           )}
         </TabsContent>
 
-        {/* Eventos (demo) */}
+        {/* Eventos */}
         <TabsContent value="eventos" className="space-y-4">
-          <Alert>
-            <Construction className="h-4 w-4" />
-            <AlertDescription>
-              La gestión de eventos es una función en desarrollo: no existe todavía en el backend.
-              Lo que ves aquí es contenido de ejemplo, salvo los eventos que crees, que solo se
-              guardan en tu sesión actual.
-            </AlertDescription>
-          </Alert>
-
-          {combinedEvents.length > 0 ? (
-            combinedEvents.map((event) => <EventCard key={event.id} event={event} />)
+          {eventsError ? (
+            <Card className="border-destructive/30">
+              <CardContent className="p-6 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-foreground">No pudimos cargar los eventos</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {eventsError instanceof ApiError ? eventsError.message : 'Verifica tu conexión.'}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : eventsLoading ? (
+            <div className="space-y-3">
+              {[1, 2].map((i) => (
+                <Skeleton key={i} className="h-28 w-full" />
+              ))}
+            </div>
+          ) : events.length > 0 ? (
+            events.map((event) => (
+              <EventCard
+                key={event.id}
+                event={event}
+                isMember={isMember}
+                attendeeCount={attendeesByEvent[event.id]}
+                isConfirming={confirmingEventId === event.id}
+                onConfirm={() => handleConfirmAttendance(event.id)}
+              />
+            ))
           ) : (
             <EmptyState
               type="no-events"
-              title="No hay eventos próximos"
               description={
                 isMember
                   ? 'Crea un evento para reunir al grupo.'
@@ -766,9 +867,10 @@ export default function GrupoPage({ params }: { params: Promise<{ id: string }> 
   )
 }
 
-function PostCard({ post, authorName }: { post: PostVM; authorName?: string }) {
+function PostCard({ post, fallbackName }: { post: PostVM; fallbackName?: string }) {
   const [spoilerRevealed, setSpoilerRevealed] = useState(false)
   const isHidden = post.hasSpoiler && !spoilerRevealed
+  const displayName = post.authorName || fallbackName || 'Usuario'
 
   return (
     <Card className="border-border/50">
@@ -777,11 +879,11 @@ function PostCard({ post, authorName }: { post: PostVM; authorName?: string }) {
         <div className="flex items-center gap-3 mb-4">
           <Avatar className="w-10 h-10 bg-primary/10">
             <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
-              {initialsFrom(authorName)}
+              {initialsFrom(post.authorName || fallbackName)}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm text-foreground">{authorName || 'Tú'}</p>
+            <p className="font-medium text-sm text-foreground">{displayName}</p>
             <p className="text-xs text-muted-foreground">
               {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true, locale: es })}
             </p>
@@ -844,23 +946,82 @@ function PostCard({ post, authorName }: { post: PostVM; authorName?: string }) {
   )
 }
 
-function EventCard({ event }: { event: DemoEvent }) {
+function EventCard({
+  event,
+  isMember,
+  attendeeCount,
+  isConfirming,
+  onConfirm,
+}: {
+  event: EventVM
+  isMember: boolean
+  attendeeCount?: number
+  isConfirming: boolean
+  onConfirm: () => void
+}) {
+  const eventDate = new Date(event.eventDate)
+  const past = isPast(eventDate)
+
   return (
-    <Card className="border-border/50">
+    <Card className={cn('border-border/50', past && 'opacity-70')}>
       <CardContent className="pt-6">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="font-medium text-foreground">{event.title}</p>
-            <p className="text-sm text-muted-foreground mt-1">{event.description}</p>
-          </div>
-          <Badge variant="secondary" className="gap-1 shrink-0">
-            {event.modality === 'virtual' ? (
-              <Video className="w-3.5 h-3.5" />
-            ) : (
-              <MapPin className="w-3.5 h-3.5" />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <p className="font-medium text-foreground">{event.title}</p>
+              {past && (
+                <Badge variant="outline" className="text-xs">
+                  Finalizado
+                </Badge>
+              )}
+            </div>
+            {event.description && (
+              <p className="text-sm text-muted-foreground mt-1">{event.description}</p>
             )}
-            {event.modality === 'virtual' ? 'Virtual' : 'Presencial'}
-          </Badge>
+            <div className="flex flex-wrap items-center gap-3 mt-3 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                {format(eventDate, "d 'de' MMMM, yyyy · HH:mm", { locale: es })}
+              </span>
+              {typeof attendeeCount === 'number' && (
+                <span className="flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  {attendeeCount} {attendeeCount === 1 ? 'asistente' : 'asistentes'}
+                </span>
+              )}
+              {event.modality === 'virtual' && event.link && (
+                <a
+                  href={event.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-primary hover:underline"
+                >
+                  <LinkIcon className="w-3.5 h-3.5" />
+                  Enlace de la reunión
+                </a>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <Badge variant="secondary" className="gap-1">
+              {event.modality === 'virtual' ? (
+                <Video className="w-3.5 h-3.5" />
+              ) : (
+                <MapPin className="w-3.5 h-3.5" />
+              )}
+              {event.modality === 'virtual' ? 'Virtual' : 'Presencial'}
+            </Badge>
+            {isMember && !past && (
+              <Button size="sm" variant="outline" onClick={onConfirm} disabled={isConfirming}>
+                {isConfirming ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <CalendarCheck className="w-3.5 h-3.5 mr-1.5" />
+                )}
+                Confirmar asistencia
+              </Button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

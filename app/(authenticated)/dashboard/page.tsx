@@ -10,7 +10,11 @@
 //   - "Mis grupos" comes from GET /users/:id/groups — every group the user
 //     created OR joined, with their role in each. This is the real
 //     created+joined relationship, not just `created_by`.
-//   - Events are intentionally omitted (no backend endpoint yet).
+//   - Events now have full backend support, but only scoped to a single group
+//     (GET /groups/:id/events). There is no "all my groups' events" endpoint,
+//     so an aggregated events feed here would need one request per group; see
+//     the group detail page (app/(authenticated)/grupo/[id]/page.tsx) for the
+//     real per-group events list, creation and attendance confirmation.
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'

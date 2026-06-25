@@ -8,6 +8,9 @@ import type {
   UserGroupDTO,
   GroupMemberDTO,
   PostDTO,
+  PostWithAuthorDTO,
+  EventDTO,
+  AttendeeDetailDTO,
 } from "@/lib/api"
 
 // --- Depth level -----------------------------------------------------------
@@ -128,27 +131,71 @@ export function mapGroupMember(dto: GroupMemberDTO): GroupMemberVM {
 }
 
 // --- Forum posts --------------------------------------------------------------
-// NOTE: there is no endpoint to list historical posts (see lib/api/endpoints.ts),
-// so this view model only ever maps posts created in the current session.
 
 export interface PostVM {
   id: number
   groupId: number
   userId: number
+  authorName: string | null
   content: string
   hasSpoiler: boolean
   spoilerProgress: string | null
   createdAt: string
 }
 
-export function mapPost(dto: PostDTO): PostVM {
+// Accepts both the plain create-post response (PostDTO) and the listing
+// response that includes the resolved author name (PostWithAuthorDTO).
+export function mapPost(dto: PostDTO | PostWithAuthorDTO): PostVM {
   return {
     id: dto.id,
     groupId: dto.group_id,
     userId: dto.user_id,
+    authorName: "author_name" in dto ? dto.author_name : null,
     content: dto.content,
     hasSpoiler: dto.has_spoiler,
     spoilerProgress: dto.spoiler_progress,
     createdAt: dto.created_at,
+  }
+}
+
+// --- Group events --------------------------------------------------------------
+
+export interface EventVM {
+  id: number
+  groupId: number
+  createdBy: number
+  title: string
+  description: string | null
+  eventDate: string
+  modality: "in-person" | "virtual"
+  link: string | null
+  createdAt: string
+}
+
+export function mapEvent(dto: EventDTO): EventVM {
+  return {
+    id: dto.id,
+    groupId: dto.group_id,
+    createdBy: dto.created_by,
+    title: dto.title,
+    description: dto.description,
+    eventDate: dto.event_date,
+    modality: dto.modality,
+    link: dto.link,
+    createdAt: dto.created_at,
+  }
+}
+
+export interface AttendeeVM {
+  userId: number
+  name: string | null
+  confirmedAt: string
+}
+
+export function mapAttendee(dto: AttendeeDetailDTO): AttendeeVM {
+  return {
+    userId: dto.user_id,
+    name: dto.name,
+    confirmedAt: dto.confirmed_at,
   }
 }

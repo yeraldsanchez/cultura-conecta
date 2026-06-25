@@ -1,9 +1,9 @@
 // Typed bindings for every CulturaConecta backend endpoint.
 //
 // These mirror the Go service output structs exactly. Endpoints still not
-// exposed by the backend at all (single group fetch, leave group, forum
-// listing, events) intentionally have no function here — those flows fall
-// back to clearly-marked local mock data in the app layer.
+// exposed by the backend at all (single group fetch, leave group) intentionally
+// have no function here — those flows fall back to clearly-marked local mock
+// data / client-side fallbacks in the app layer.
 
 import { apiRequest } from "./client"
 
@@ -327,10 +327,6 @@ export async function getGroupMembers(groupId: number): Promise<GroupMemberDTO[]
 }
 
 // --- Group forum posts ------------------------------------------------------
-// NOTE: the backend can create posts but has no endpoint to list them yet, so
-// there is no `getPosts`. Posts created in the current session are kept in
-// local component state — see the group detail page for the "no hay listado"
-// notice shown alongside them.
 
 export interface PostDTO {
   id: number
@@ -358,4 +354,103 @@ export async function createPost(groupId: number, input: CreatePostInput): Promi
     },
   })
   return data.post
+}
+
+// Posts include the author's display name resolved server-side.
+export interface PostWithAuthorDTO extends PostDTO {
+  author_name: string | null
+}
+
+export interface ListGroupPostsParams {
+  page?: number
+  limit?: number
+}
+
+// Lists a group's forum posts (most recent first). Requires the authenticated
+// user to be a member of the group.
+export async function listGroupPosts(
+  groupId: number,
+  params: ListGroupPostsParams = {},
+): Promise<PostWithAuthorDTO[]> {
+  const data = await apiRequest<{ posts: PostWithAuthorDTO[] }>(`/groups/${groupId}/posts`, {
+    query: { page: params.page, limit: params.limit },
+  })
+  return data.posts ?? []
+}
+
+// --- Group events ------------------------------------------------------------
+
+export interface EventDTO {
+  id: number
+  group_id: number
+  created_by: number
+  title: string
+  description: string | null
+  event_date: string
+  modality: "in-person" | "virtual"
+  link: string | null
+  created_at: string
+}
+
+export interface CreateEventInput {
+  title: string
+  description?: string | null
+  // ISO 8601 datetime string, e.g. new Date(...).toISOString().
+  event_date: string
+  modality: "in-person" | "virtual"
+  link?: string | null
+}
+
+// Creates an event in a group. The authenticated user must be a member.
+export async function createEvent(groupId: number, input: CreateEventInput): Promise<EventDTO> {
+  const data = await apiRequest<{ event: EventDTO }>(`/groups/${groupId}/events`, {
+    method: "POST",
+    body: {
+      title: input.title,
+      description: input.description ?? null,
+      event_date: input.event_date,
+      modality: input.modality,
+      link: input.link ?? null,
+    },
+  })
+  return data.event
+}
+
+// Lists every event for a group.
+export async function getEvents(groupId: number): Promise<EventDTO[]> {
+  const data = await apiRequest<{ events: EventDTO[] }>(`/groups/${groupId}/events`)
+  return data.events ?? []
+}
+
+export interface AttendeeDTO {
+  event_id: number
+  user_id: number
+  confirmed_at: string
+}
+
+// Confirms the authenticated user's attendance to an event. The user must be
+// a member of the event's group. Returns 201 with the attendance record.
+export async function confirmAttendance(groupId: number, eventId: number): Promise<AttendeeDTO> {
+  const data = await apiRequest<{ attendee: AttendeeDTO }>(
+    `/groups/${groupId}/events/${eventId}/attendees`,
+    { method: "POST" },
+  )
+  return data.attendee
+}
+
+export interface AttendeeDetailDTO {
+  user_id: number
+  name: string | null
+  confirmed_at: string
+}
+
+// Lists the confirmed attendees of an event.
+export async function getEventAttendees(
+  groupId: number,
+  eventId: number,
+): Promise<AttendeeDetailDTO[]> {
+  const data = await apiRequest<{ attendees: AttendeeDetailDTO[] }>(
+    `/groups/${groupId}/events/${eventId}/attendees`,
+  )
+  return data.attendees ?? []
 }
