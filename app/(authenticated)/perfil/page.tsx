@@ -7,8 +7,8 @@
 // not just a local cache. A null profile just means onboarding was never
 // completed for this account — not a backend limitation.
 // "Mis grupos" uses GET /users/:id/groups — every group the user created OR
-// joined, not just `created_by`. Events/attendance have no backend endpoint
-// and are intentionally not shown here.
+// joined, not just `created_by`. Events/attendance are scoped per group (see
+// the group detail page) and are not aggregated here.
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
